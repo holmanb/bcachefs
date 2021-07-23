@@ -235,8 +235,16 @@ static int bch2_rebalance_thread(void *arg)
 		prev_cputime	= cputime;
 
 		r->state = REBALANCE_RUNNING;
+		mutex_lock(&r->move_stats_lock);
 		memset(&r->move_stats, 0, sizeof(r->move_stats));
+		mutex_unlock(&r->move_stats_lock);
 		rebalance_work_reset(c);
+
+		progress_list_add(&r->progress,
+				&c->data_progress_lock,
+				&c->data_progress_head_list,
+				&r->move_stats,
+				&r->move_stats_lock);
 
 		bch2_move_data(c,
 			       0,		POS_MIN,
@@ -245,7 +253,10 @@ static int bch2_rebalance_thread(void *arg)
 			       NULL, /*  &r->pd.rate, */
 			       writepoint_ptr(&c->rebalance_write_point),
 			       rebalance_pred, NULL,
-			       &r->move_stats);
+			       &r->move_stats,
+			       &r->move_stats_lock);
+
+		progress_list_del(&r->progress, &c->data_progress_lock);
 	}
 
 	return 0;
@@ -283,7 +294,9 @@ void bch2_rebalance_work_to_text(struct printbuf *out, struct bch_fs *c)
 	case REBALANCE_RUNNING:
 		pr_buf(out, "running\n"
 		       "pos ");
+		mutex_lock(&r->move_stats_lock);
 		bch2_bpos_to_text(out, r->move_stats.pos);
+		mutex_unlock(&r->move_stats_lock);
 		pr_buf(out, "\n");
 		break;
 	}
@@ -318,6 +331,8 @@ int bch2_rebalance_start(struct bch_fs *c)
 	if (c->opts.nochanges)
 		return 0;
 
+	mutex_init(&c->rebalance.move_stats_lock);
+
 	p = kthread_create(bch2_rebalance_thread, c, "bch-rebalance/%s", c->name);
 	if (IS_ERR(p)) {
 		bch_err(c, "error creating rebalance thread: %li", PTR_ERR(p));
@@ -332,7 +347,11 @@ int bch2_rebalance_start(struct bch_fs *c)
 
 void bch2_fs_rebalance_init(struct bch_fs *c)
 {
-	bch2_pd_controller_init(&c->rebalance.pd);
+	struct bch_fs_rebalance *r = &c->rebalance;
 
-	atomic64_set(&c->rebalance.work_unknown_dev, S64_MAX);
+	bch2_pd_controller_init(&r->pd);
+
+	atomic64_set(&r->work_unknown_dev, S64_MAX);
+	scnprintf(r->progress.name, sizeof(r->progress.name),
+			"%s", "rebalance");
 }

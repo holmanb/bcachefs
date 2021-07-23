@@ -547,6 +547,7 @@ static int __bch2_move_data(struct bch_fs *c,
 		struct bpos end,
 		move_pred_fn pred, void *arg,
 		struct bch_move_stats *stats,
+		struct mutex *stats_lock,
 		enum btree_id btree_id)
 {
 	bool kthread = (current->flags & PF_KTHREAD) != 0;
@@ -563,9 +564,11 @@ static int __bch2_move_data(struct bch_fs *c,
 	bch2_bkey_buf_init(&sk);
 	bch2_trans_init(&trans, c, 0, 0);
 
+	mutex_lock(stats_lock);
 	stats->data_type = BCH_DATA_user;
 	stats->btree_id	= btree_id;
 	stats->pos	= start;
+	mutex_unlock(stats_lock);
 
 	iter = bch2_trans_get_iter(&trans, btree_id, start,
 				   BTREE_ITER_PREFETCH);
@@ -599,7 +602,9 @@ static int __bch2_move_data(struct bch_fs *c,
 
 		k = bch2_btree_iter_peek(iter);
 
+		mutex_lock(stats_lock);
 		stats->pos = iter->pos;
+		mutex_unlock(stats_lock);
 
 		if (!k.k)
 			break;
@@ -670,8 +675,11 @@ static int __bch2_move_data(struct bch_fs *c,
 		if (rate)
 			bch2_ratelimit_increment(rate, k.k->size);
 next:
+		/* this lock isn't necessary, methinks */
+		mutex_lock(stats_lock);
 		atomic64_add(k.k->size * bch2_bkey_nr_ptrs_allocated(k),
 			     &stats->sectors_seen);
+		mutex_unlock(stats_lock);
 next_nondata:
 		bch2_btree_iter_advance(iter);
 		bch2_trans_cond_resched(&trans);
@@ -691,9 +699,12 @@ int bch2_move_data(struct bch_fs *c,
 		   struct bch_ratelimit *rate,
 		   struct write_point_specifier wp,
 		   move_pred_fn pred, void *arg,
-		   struct bch_move_stats *stats)
+		   struct bch_move_stats *stats,
+		   struct mutex *stats_lock)
 {
+	mutex_lock(stats_lock);
 	struct moving_context ctxt = { .stats = stats };
+	mutex_unlock(stats_lock);
 	enum btree_id id;
 	int ret;
 
@@ -701,12 +712,16 @@ int bch2_move_data(struct bch_fs *c,
 	INIT_LIST_HEAD(&ctxt.reads);
 	init_waitqueue_head(&ctxt.wait);
 
+	mutex_lock(stats_lock);
 	stats->data_type = BCH_DATA_user;
+	mutex_unlock(stats_lock);
 
 	for (id = start_btree_id;
 	     id <= min_t(unsigned, end_btree_id, BTREE_ID_NR - 1);
 	     id++) {
+		mutex_lock(stats_lock);
 		stats->btree_id = id;
+		mutex_unlock(stats_lock);
 
 		if (id != BTREE_ID_extents &&
 		    id != BTREE_ID_reflink)
@@ -715,7 +730,7 @@ int bch2_move_data(struct bch_fs *c,
 		ret = __bch2_move_data(c, &ctxt, rate, wp,
 				       id == start_btree_id ? start_pos : POS_MIN,
 				       id == end_btree_id   ? end_pos   : POS_MAX,
-				       pred, arg, stats, id);
+				       pred, arg, stats, stats_lock, id);
 		if (ret)
 			break;
 	}
@@ -726,9 +741,12 @@ int bch2_move_data(struct bch_fs *c,
 
 	EBUG_ON(atomic_read(&ctxt.write_sectors));
 
+	/* this lock isn't necessary, methinks */
+	mutex_lock(stats_lock);
 	trace_move_data(c,
 			atomic64_read(&stats->sectors_moved),
 			atomic64_read(&stats->keys_moved));
+	mutex_unlock(stats_lock);
 
 	return ret;
 }
@@ -939,8 +957,14 @@ int bch2_data_job(struct bch_fs *c,
 		  struct bch_move_stats *stats,
 		  struct bch_ioctl_data op)
 {
+	/* XXX_kill: afaik this function is only called by the ioctl stuff from
+	 * -tools. Currently the stats here are not exported via sysfs. The
+	 *  mutex is only required for protecting simultaneous access to
+	 *  struct bch_move_stats stats and is not really a requirement here
+	 *  unless this function is changed to export the sysfs code.
+	 */
+	struct mutex stats_lock;
 	int ret = 0;
-
 	switch (op.op) {
 	case BCH_DATA_OP_REREPLICATE:
 		stats->data_type = BCH_DATA_journal;
@@ -960,7 +984,7 @@ int bch2_data_job(struct bch_fs *c,
 				     op.start_btree,	op.start_pos,
 				     op.end_btree,	op.end_pos,
 				     NULL, writepoint_hashed((unsigned long) current),
-				     rereplicate_pred, c, stats) ?: ret;
+				     rereplicate_pred, c, stats, &stats_lock) ?: ret;
 		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_MIGRATE:
@@ -980,7 +1004,7 @@ int bch2_data_job(struct bch_fs *c,
 				     op.start_btree,	op.start_pos,
 				     op.end_btree,	op.end_pos,
 				     NULL, writepoint_hashed((unsigned long) current),
-				     migrate_pred, &op, stats) ?: ret;
+				     migrate_pred, &op, stats, &stats_lock) ?: ret;
 		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_REWRITE_OLD_NODES:
@@ -991,4 +1015,28 @@ int bch2_data_job(struct bch_fs *c,
 	}
 
 	return ret;
+}
+
+void progress_list_add(struct data_progress *progress,
+			struct mutex *progress_lock,
+			struct list_head *head,
+			struct bch_move_stats *stats,
+			struct mutex *stats_lock)
+{
+		/* stats values don't change so stats_lock need not be held */
+		mutex_lock(progress_lock);
+
+		list_add(&progress->list, head);
+		progress->stats = stats;
+		progress->stats_lock = stats_lock;
+
+		mutex_unlock(progress_lock);
+}
+
+void progress_list_del(struct data_progress *progress,
+			struct mutex *progress_lock)
+{
+		mutex_lock(progress_lock);
+		list_del(&progress->list);
+		mutex_unlock(progress_lock);
 }

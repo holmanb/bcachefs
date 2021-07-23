@@ -20,6 +20,8 @@ struct bch_fs_rebalance {
 	u64			throttled_until_iotime;
 	unsigned long		throttled_until_cputime;
 	struct bch_move_stats	move_stats;
+	struct data_progress	progress;
+	struct mutex		move_stats_lock;
 
 	unsigned		enabled:1;
 };

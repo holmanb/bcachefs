@@ -14,4 +14,11 @@ struct bch_move_stats {
 	atomic64_t		sectors_raced;
 };
 
+struct data_progress {
+	struct list_head list;
+	struct bch_move_stats *stats;
+	struct mutex *stats_lock;
+	char name[16];
+};
+
 #endif /* _BCACHEFS_MOVE_TYPES_H */

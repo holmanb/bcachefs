@@ -203,6 +203,8 @@ read_attribute(new_stripes);
 read_attribute(io_timers_read);
 read_attribute(io_timers_write);
 
+read_attribute(data_op_data_progress);
+
 #ifdef CONFIG_BCACHEFS_TESTS
 write_attribute(perf_test);
 #endif /* CONFIG_BCACHEFS_TESTS */
@@ -237,6 +239,38 @@ static size_t bch2_btree_avg_write_size(struct bch_fs *c)
 	u64 sectors = atomic64_read(&c->btree_writes_sectors);
 
 	return nr ? div64_u64(sectors, nr) : 0;
+}
+
+static long stats_to_text(struct printbuf *out, struct bch_fs *c,
+		struct bch_move_stats *stats, char *name)
+{
+	pr_buf(out, "%s: data type %s btree_id %s position: ",
+		name,
+		bch2_data_types[stats->data_type],
+		bch2_btree_ids[stats->btree_id]);
+	bch2_bpos_to_text(out, c->gc_gens_pos);
+	pr_buf(out, "%s", "\n");
+
+	return 0;
+}
+
+static long data_progress_to_text(struct printbuf *out, struct bch_fs *c)
+{
+	long ret = 0;
+	struct data_progress *iter;
+	mutex_lock(&c->data_progress_lock);
+
+	if(list_empty(&c->data_progress_head_list))
+		pr_buf(out, "%s", "no progress to report\n");
+	else
+		list_for_each_entry(iter, &c->data_progress_head_list, list) {
+			mutex_lock(iter->stats_lock);
+			stats_to_text(out, c, iter->stats, iter->name);
+			mutex_unlock(iter->stats_lock);
+		}
+
+	mutex_unlock(&c->data_progress_lock);
+	return ret;
 }
 
 static int fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
@@ -434,6 +468,11 @@ SHOW(bch2_fs)
 		return out.pos - buf;
 	}
 
+	if (attr == &sysfs_data_op_data_progress) {
+		data_progress_to_text(&out, c);
+		return out.pos - buf;
+	}
+
 	return 0;
 }
 
@@ -595,6 +634,8 @@ struct attribute *bch2_fs_internal_files[] = {
 
 	&sysfs_io_timers_read,
 	&sysfs_io_timers_write,
+
+	&sysfs_data_op_data_progress,
 
 	&sysfs_internal_uuid,
 	NULL
