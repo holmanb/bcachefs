@@ -264,9 +264,7 @@ static long data_progress_to_text(struct printbuf *out, struct bch_fs *c)
 		pr_buf(out, "%s", "no progress to report\n");
 	else
 		list_for_each_entry(iter, &c->data_progress_head_list, list) {
-			mutex_lock(iter->stats_lock);
 			stats_to_text(out, c, iter->stats, iter->name);
-			mutex_unlock(iter->stats_lock);
 		}
 
 	mutex_unlock(&c->data_progress_lock);

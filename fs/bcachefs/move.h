@@ -63,8 +63,7 @@ int bch2_move_data(struct bch_fs *,
 		   struct bch_ratelimit *,
 		   struct write_point_specifier,
 		   move_pred_fn, void *,
-		   struct bch_move_stats *,
-		   struct mutex *);
+		   struct bch_move_stats *);
 
 int bch2_data_job(struct bch_fs *,
 		  struct bch_move_stats *,
@@ -73,8 +72,7 @@ int bch2_data_job(struct bch_fs *,
 void progress_list_add(struct data_progress *progress,
 			struct mutex *progress_lock,
 			struct list_head *head,
-			struct bch_move_stats *stats,
-			struct mutex *stats_lock);
+			struct bch_move_stats *stats);
 
 void progress_list_del(struct data_progress *progress,
 			struct mutex *progress_lock);

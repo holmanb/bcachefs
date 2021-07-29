@@ -17,7 +17,6 @@ struct bch_move_stats {
 struct data_progress {
 	struct list_head list;
 	struct bch_move_stats *stats;
-	struct mutex *stats_lock;
 	char name[16];
 };
 
