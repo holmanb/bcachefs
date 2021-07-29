@@ -1200,14 +1200,15 @@ use_clean:
 
 	if (!(c->sb.compat & (1ULL << BCH_COMPAT_extents_above_btree_updates_done)) ||
 	    !(c->sb.compat & (1ULL << BCH_COMPAT_bformat_overflow_done))) {
-		struct bch_move_stats stats = { 0 };
+		struct bch_data_progress data_progress;
+		bch_data_progress_init(&data_progress, "recovery");
 
 		bch_info(c, "scanning for old btree nodes");
 		ret = bch2_fs_read_write(c);
 		if (ret)
 			goto err;
 
-		ret = bch2_scan_old_btree_nodes(c, &stats);
+		ret = bch2_scan_old_btree_nodes(c, &data_progress);
 		if (ret)
 			goto err;
 		bch_info(c, "scanning for old btree nodes done");

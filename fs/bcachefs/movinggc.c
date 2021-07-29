@@ -137,8 +137,7 @@ static int bch2_copygc(struct bch_fs *c)
 	copygc_heap *h = &c->copygc_heap;
 	struct copygc_heap_entry e, *i;
 	struct bucket_array *buckets;
-	struct bch_move_stats move_stats;
-	struct data_progress copygc_progress;
+	struct bch_data_progress data_progress;
 	u64 sectors_to_move = 0, sectors_not_moved = 0;
 	u64 sectors_reserved = 0;
 	u64 buckets_to_move, buckets_not_moved = 0;
@@ -147,10 +146,8 @@ static int bch2_copygc(struct bch_fs *c)
 	size_t b, heap_size = 0;
 	int ret;
 
-	scnprintf(copygc_progress.name, sizeof(copygc_progress.name),
-			"%s", "copygc");
+	bch_data_progress_init(&data_progress, "copygc");
 
-	memset(&move_stats, 0, sizeof(move_stats));
 	/*
 	 * Find buckets with lowest sector counts, skipping completely
 	 * empty buckets, by building a maxheap sorted by sector count,
@@ -234,21 +231,13 @@ static int bch2_copygc(struct bch_fs *c)
 			sizeof(h->data[0]),
 			bucket_offset_cmp, NULL);
 
-	progress_list_add(&copygc_progress,
-			&c->data_progress_lock,
-			&c->data_progress_head_list,
-			&move_stats);
-
 	ret = bch2_move_data(c,
 			     0,			POS_MIN,
 			     BTREE_ID_NR,	POS_MAX,
 			     NULL,
 			     writepoint_ptr(&c->copygc_write_point),
 			     copygc_pred, NULL,
-			     &move_stats);
-
-	progress_list_del(&copygc_progress,
-			&c->data_progress_lock);
+			     &data_progress);
 
 	for_each_rw_member(ca, c, dev_idx) {
 		down_read(&ca->bucket_lock);
@@ -277,12 +266,12 @@ static int bch2_copygc(struct bch_fs *c)
 			"copygc finished but %llu/%llu sectors, %llu/%llu buckets not moved (move stats: moved %llu sectors, raced %llu keys, %llu sectors)",
 			 sectors_not_moved, sectors_to_move,
 			 buckets_not_moved, buckets_to_move,
-			 atomic64_read(&move_stats.sectors_moved),
-			 atomic64_read(&move_stats.keys_raced),
-			 atomic64_read(&move_stats.sectors_raced));
+			 atomic64_read(&data_progress.stats.sectors_moved),
+			 atomic64_read(&data_progress.stats.keys_raced),
+			 atomic64_read(&data_progress.stats.sectors_raced));
 
 	trace_copygc(c,
-		     atomic64_read(&move_stats.sectors_moved), sectors_not_moved,
+		     atomic64_read(&data_progress.stats.sectors_moved), sectors_not_moved,
 		     buckets_to_move, buckets_not_moved);
 	return 0;
 }

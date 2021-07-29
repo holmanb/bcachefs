@@ -685,28 +685,68 @@ out:
 	return ret;
 }
 
+void inline bch_data_progress_init(struct bch_data_progress *data_progress,
+				   char *name){
+	memset(data_progress, 0, sizeof(*data_progress));
+
+	scnprintf(data_progress->name, sizeof(data_progress->name),
+			"%s", name);
+}
+
+static void inline progress_list_add(struct bch_fs *c,
+				     struct bch_data_progress *data_progress)
+{
+		mutex_lock(&c->data_progress_lock);
+		list_add(&data_progress->list, &c->data_progress_list);
+		mutex_unlock(&c->data_progress_lock);
+}
+
+static void inline progress_list_del(struct bch_fs *c,
+				     struct bch_data_progress *data_progress)
+{
+		mutex_lock(&c->data_progress_lock);
+		list_del(&data_progress->list);
+		mutex_unlock(&c->data_progress_lock);
+}
+
+/* if data_progress_list contains a matching name, copy it to data_progress */
+void inline progress_list_find(struct bch_fs *c, char *name,
+			       struct bch_data_progress *data_progress)
+{
+	struct bch_data_progress *iter;
+	mutex_lock(&c->data_progress_lock);
+	list_for_each_entry(iter, &c->data_progress_list, list) {
+		if(!strncmp(name, iter->name, 32)){
+			memcpy(data_progress, iter, sizeof(*data_progress));
+			break;
+		}
+	}
+	mutex_unlock(&c->data_progress_lock);
+}
+
 int bch2_move_data(struct bch_fs *c,
 		   enum btree_id start_btree_id, struct bpos start_pos,
 		   enum btree_id end_btree_id,   struct bpos end_pos,
 		   struct bch_ratelimit *rate,
 		   struct write_point_specifier wp,
 		   move_pred_fn pred, void *arg,
-		   struct bch_move_stats *stats)
+		   struct bch_data_progress *data_progress)
 {
-	struct moving_context ctxt = { .stats = stats };
+	struct moving_context ctxt = { .stats = &data_progress->stats};
 	enum btree_id id;
 	int ret;
 
+	progress_list_add(c, data_progress);
 	closure_init_stack(&ctxt.cl);
 	INIT_LIST_HEAD(&ctxt.reads);
 	init_waitqueue_head(&ctxt.wait);
 
-	stats->data_type = BCH_DATA_user;
+	data_progress->stats.data_type = BCH_DATA_user;
 
 	for (id = start_btree_id;
 	     id <= min_t(unsigned, end_btree_id, BTREE_ID_NR - 1);
 	     id++) {
-		stats->btree_id = id;
+		data_progress->stats.btree_id = id;
 
 		if (id != BTREE_ID_extents &&
 		    id != BTREE_ID_reflink)
@@ -715,7 +755,7 @@ int bch2_move_data(struct bch_fs *c,
 		ret = __bch2_move_data(c, &ctxt, rate, wp,
 				       id == start_btree_id ? start_pos : POS_MIN,
 				       id == end_btree_id   ? end_pos   : POS_MAX,
-				       pred, arg, stats, id);
+				       pred, arg, &data_progress->stats, id);
 		if (ret)
 			break;
 	}
@@ -727,9 +767,10 @@ int bch2_move_data(struct bch_fs *c,
 	EBUG_ON(atomic_read(&ctxt.write_sectors));
 
 	trace_move_data(c,
-			atomic64_read(&stats->sectors_moved),
-			atomic64_read(&stats->keys_moved));
+			atomic64_read(&data_progress->stats.sectors_moved),
+			atomic64_read(&data_progress->stats.keys_moved));
 
+	progress_list_del(c, data_progress);
 	return ret;
 }
 
@@ -741,7 +782,7 @@ static int bch2_move_btree(struct bch_fs *c,
 			   enum btree_id start_btree_id, struct bpos start_pos,
 			   enum btree_id end_btree_id,   struct bpos end_pos,
 			   move_btree_pred pred, void *arg,
-			   struct bch_move_stats *stats)
+			   struct bch_data_progress *data_progress)
 {
 	bool kthread = (current->flags & PF_KTHREAD) != 0;
 	struct bch_io_opts io_opts = bch2_opts_to_inode_opts(c->opts);
@@ -752,15 +793,15 @@ static int bch2_move_btree(struct bch_fs *c,
 	struct data_opts data_opts;
 	enum data_cmd cmd;
 	int ret = 0;
-
 	bch2_trans_init(&trans, c, 0, 0);
+	progress_list_add(c, data_progress);
 
-	stats->data_type = BCH_DATA_btree;
+	data_progress->stats.data_type = BCH_DATA_btree;
 
 	for (id = start_btree_id;
 	     id <= min_t(unsigned, end_btree_id, BTREE_ID_NR - 1);
 	     id++) {
-		stats->btree_id = id;
+		data_progress->stats.btree_id = id;
 
 		for_each_btree_node(&trans, iter, id,
 				    id == start_btree_id ? start_pos : POS_MIN,
@@ -772,7 +813,7 @@ static int bch2_move_btree(struct bch_fs *c,
 			     bpos_cmp(b->key.k.p, end_pos)) > 0)
 				break;
 
-			stats->pos = iter->pos;
+			data_progress->stats.pos = iter->pos;
 
 			switch ((cmd = pred(c, arg, b, &io_opts, &data_opts))) {
 			case DATA_SKIP:
@@ -802,6 +843,7 @@ next:
 	if (ret)
 		bch_err(c, "error %i in bch2_move_btree", ret);
 
+	progress_list_del(c, data_progress);
 	return ret;
 }
 
@@ -915,14 +957,13 @@ static enum data_cmd rewrite_old_nodes_pred(struct bch_fs *c, void *arg,
 	return DATA_SKIP;
 }
 
-int bch2_scan_old_btree_nodes(struct bch_fs *c, struct bch_move_stats *stats)
+int bch2_scan_old_btree_nodes(struct bch_fs *c, struct bch_data_progress *data_progress)
 {
 	int ret;
-
 	ret = bch2_move_btree(c,
 			      0,		POS_MIN,
 			      BTREE_ID_NR,	SPOS_MAX,
-			      rewrite_old_nodes_pred, c, stats);
+			      rewrite_old_nodes_pred, c, data_progress);
 	if (!ret) {
 		mutex_lock(&c->sb_lock);
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(1ULL << BCH_COMPAT_extents_above_btree_updates_done);
@@ -936,19 +977,20 @@ int bch2_scan_old_btree_nodes(struct bch_fs *c, struct bch_move_stats *stats)
 }
 
 int bch2_data_job(struct bch_fs *c,
-		  struct bch_move_stats *stats,
+		  struct bch_data_progress *data_progress,
 		  struct bch_ioctl_data op)
 {
 	int ret = 0;
 	switch (op.op) {
 	case BCH_DATA_OP_REREPLICATE:
-		stats->data_type = BCH_DATA_journal;
+		bch_data_progress_init(data_progress, "rereplicate");
+		data_progress->stats.data_type = BCH_DATA_journal;
 		ret = bch2_journal_flush_device_pins(&c->journal, -1);
 
 		ret = bch2_move_btree(c,
 				      op.start_btree,	op.start_pos,
 				      op.end_btree,	op.end_pos,
-				      rereplicate_btree_pred, c, stats) ?: ret;
+				      rereplicate_btree_pred, c, data_progress) ?: ret;
 
 		closure_wait_event(&c->btree_interior_update_wait,
 				   !bch2_btree_interior_updates_nr_pending(c));
@@ -959,31 +1001,33 @@ int bch2_data_job(struct bch_fs *c,
 				     op.start_btree,	op.start_pos,
 				     op.end_btree,	op.end_pos,
 				     NULL, writepoint_hashed((unsigned long) current),
-				     rereplicate_pred, c, stats) ?: ret;
+				     rereplicate_pred, c, data_progress) ?: ret;
 		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_MIGRATE:
 		if (op.migrate.dev >= c->sb.nr_devices)
 			return -EINVAL;
 
-		stats->data_type = BCH_DATA_journal;
+		bch_data_progress_init(data_progress, "migrate");
+		data_progress->stats.data_type = BCH_DATA_journal;
 		ret = bch2_journal_flush_device_pins(&c->journal, op.migrate.dev);
 
 		ret = bch2_move_btree(c,
 				      op.start_btree,	op.start_pos,
 				      op.end_btree,	op.end_pos,
-				      migrate_btree_pred, &op, stats) ?: ret;
+				      migrate_btree_pred, &op, data_progress) ?: ret;
 		ret = bch2_replicas_gc2(c) ?: ret;
 
 		ret = bch2_move_data(c,
 				     op.start_btree,	op.start_pos,
 				     op.end_btree,	op.end_pos,
 				     NULL, writepoint_hashed((unsigned long) current),
-				     migrate_pred, &op, stats) ?: ret;
+				     migrate_pred, &op, data_progress) ?: ret;
 		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_REWRITE_OLD_NODES:
-		ret = bch2_scan_old_btree_nodes(c, stats);
+		bch_data_progress_init(data_progress, "rewrite_old_nodes");
+		ret = bch2_scan_old_btree_nodes(c, data_progress);
 		break;
 	default:
 		ret = -EINVAL;
@@ -992,23 +1036,3 @@ int bch2_data_job(struct bch_fs *c,
 	return ret;
 }
 
-void progress_list_add(struct data_progress *progress,
-			struct mutex *progress_lock,
-			struct list_head *head,
-			struct bch_move_stats *stats)
-{
-		mutex_lock(progress_lock);
-
-		list_add(&progress->list, head);
-		progress->stats = stats;
-
-		mutex_unlock(progress_lock);
-}
-
-void progress_list_del(struct data_progress *progress,
-			struct mutex *progress_lock)
-{
-		mutex_lock(progress_lock);
-		list_del(&progress->list);
-		mutex_unlock(progress_lock);
-}

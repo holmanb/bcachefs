@@ -52,29 +52,24 @@ typedef enum data_cmd (*move_pred_fn)(struct bch_fs *, void *,
 				struct bkey_s_c,
 				struct bch_io_opts *, struct data_opts *);
 
-int bch2_scan_old_btree_nodes(struct bch_fs *, struct bch_move_stats *);
+int bch2_scan_old_btree_nodes(struct bch_fs *, struct bch_data_progress *);
 
-/* call progress_list_add() / progress_list_del() before and after
- * bch2_move_data() to export stats via sysfs
- */
 int bch2_move_data(struct bch_fs *,
 		   enum btree_id, struct bpos,
 		   enum btree_id, struct bpos,
 		   struct bch_ratelimit *,
 		   struct write_point_specifier,
 		   move_pred_fn, void *,
-		   struct bch_move_stats *);
+		   struct bch_data_progress *);
 
 int bch2_data_job(struct bch_fs *,
-		  struct bch_move_stats *,
+		  struct bch_data_progress *,
 		  struct bch_ioctl_data);
 
-void progress_list_add(struct data_progress *progress,
-			struct mutex *progress_lock,
-			struct list_head *head,
-			struct bch_move_stats *stats);
+void inline bch_data_progress_init(struct bch_data_progress *data_progress,
+				   char *name);
 
-void progress_list_del(struct data_progress *progress,
-			struct mutex *progress_lock);
+void inline progress_list_find(struct bch_fs *c, char *name,
+			       struct bch_data_progress *data_progress);
 
 #endif /* _BCACHEFS_MOVE_H */

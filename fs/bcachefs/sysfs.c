@@ -257,14 +257,14 @@ static long stats_to_text(struct printbuf *out, struct bch_fs *c,
 static long data_progress_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	long ret = 0;
-	struct data_progress *iter;
+	struct bch_data_progress *iter;
 	mutex_lock(&c->data_progress_lock);
 
-	if(list_empty(&c->data_progress_head_list))
+	if(list_empty(&c->data_progress_list))
 		pr_buf(out, "%s", "no progress to report\n");
 	else
-		list_for_each_entry(iter, &c->data_progress_head_list, list) {
-			stats_to_text(out, c, iter->stats, iter->name);
+		list_for_each_entry(iter, &c->data_progress_list, list) {
+			stats_to_text(out, c, &iter->stats, iter->name);
 		}
 
 	mutex_unlock(&c->data_progress_lock);

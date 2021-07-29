@@ -292,7 +292,7 @@ static long bch2_ioctl_disk_set_state(struct bch_fs *c,
 struct bch_data_ctx {
 	struct bch_fs			*c;
 	struct bch_ioctl_data		arg;
-	struct bch_move_stats		stats;
+	struct bch_data_progress	data_progress;
 
 	int				ret;
 
@@ -303,9 +303,9 @@ static int bch2_data_thread(void *arg)
 {
 	struct bch_data_ctx *ctx = arg;
 
-	ctx->ret = bch2_data_job(ctx->c, &ctx->stats, ctx->arg);
+	ctx->ret = bch2_data_job(ctx->c, &ctx->data_progress, ctx->arg);
 
-	ctx->stats.data_type = U8_MAX;
+	ctx->data_progress.stats.data_type = U8_MAX;
 	return 0;
 }
 
@@ -326,10 +326,10 @@ static ssize_t bch2_data_job_read(struct file *file, char __user *buf,
 	struct bch_fs *c = ctx->c;
 	struct bch_ioctl_data_event e = {
 		.type			= BCH_DATA_EVENT_PROGRESS,
-		.p.data_type		= ctx->stats.data_type,
-		.p.btree_id		= ctx->stats.btree_id,
-		.p.pos			= ctx->stats.pos,
-		.p.sectors_done		= atomic64_read(&ctx->stats.sectors_seen),
+		.p.data_type		= ctx->data_progress.stats.data_type,
+		.p.btree_id		= ctx->data_progress.stats.btree_id,
+		.p.pos			= ctx->data_progress.stats.pos,
+		.p.sectors_done		= atomic64_read(&ctx->data_progress.stats.sectors_seen),
 		.p.sectors_total	= bch2_fs_usage_read_short(c).used,
 	};
 

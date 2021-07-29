@@ -792,7 +792,7 @@ struct bch_fs {
 	s64			copygc_wait;
 
 	/* DATA PROGRESS STATS */
-	struct list_head	data_progress_head_list;
+	struct list_head	data_progress_list;
 	struct mutex		data_progress_lock;
 
 	/* STRIPES: */

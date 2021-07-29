@@ -166,6 +166,7 @@ static int bch2_rebalance_thread(void *arg)
 	struct bch_fs_rebalance *r = &c->rebalance;
 	struct io_clock *clock = &c->io_clock[WRITE];
 	struct rebalance_work w, p;
+	struct bch_data_progress data_progress;
 	unsigned long start, prev_start;
 	unsigned long prev_run_time, prev_run_cputime;
 	unsigned long cputime, prev_cputime;
@@ -179,6 +180,7 @@ static int bch2_rebalance_thread(void *arg)
 	prev_start	= jiffies;
 	prev_cputime	= curr_cputime();
 
+	bch_data_progress_init(&data_progress, "rebalance");
 	while (!kthread_wait_freezable(r->enabled)) {
 		cond_resched();
 
@@ -235,13 +237,8 @@ static int bch2_rebalance_thread(void *arg)
 		prev_cputime	= cputime;
 
 		r->state = REBALANCE_RUNNING;
-		memset(&r->move_stats, 0, sizeof(r->move_stats));
+		memset(&data_progress.stats, 0, sizeof(data_progress.stats));
 		rebalance_work_reset(c);
-
-		progress_list_add(&r->progress,
-				&c->data_progress_lock,
-				&c->data_progress_head_list,
-				&r->move_stats);
 
 		bch2_move_data(c,
 			       0,		POS_MIN,
@@ -250,9 +247,8 @@ static int bch2_rebalance_thread(void *arg)
 			       NULL, /*  &r->pd.rate, */
 			       writepoint_ptr(&c->rebalance_write_point),
 			       rebalance_pred, NULL,
-			       &r->move_stats);
+			       &data_progress);
 
-		progress_list_del(&r->progress, &c->data_progress_lock);
 	}
 
 	return 0;
@@ -260,6 +256,7 @@ static int bch2_rebalance_thread(void *arg)
 
 void bch2_rebalance_work_to_text(struct printbuf *out, struct bch_fs *c)
 {
+	struct bch_data_progress data_progress = {0};
 	struct bch_fs_rebalance *r = &c->rebalance;
 	struct rebalance_work w = rebalance_work(c);
 	char h1[21], h2[21];
@@ -288,10 +285,15 @@ void bch2_rebalance_work_to_text(struct printbuf *out, struct bch_fs *c)
 		       h1);
 		break;
 	case REBALANCE_RUNNING:
-		pr_buf(out, "running\n"
-		       "pos ");
-		bch2_bpos_to_text(out, r->move_stats.pos);
-		pr_buf(out, "\n");
+		progress_list_find(c, "rebalance", &data_progress);
+		if(data_progress.name){
+			pr_buf(out, "running\n"
+			       "pos ");
+			bch2_bpos_to_text(out, data_progress.stats.pos);
+			pr_buf(out, "\n");
+		} else {
+			pr_buf(out, "WARN: rebalance not running\n");
+		}
 		break;
 	}
 }
@@ -344,6 +346,4 @@ void bch2_fs_rebalance_init(struct bch_fs *c)
 	bch2_pd_controller_init(&r->pd);
 
 	atomic64_set(&r->work_unknown_dev, S64_MAX);
-	scnprintf(r->progress.name, sizeof(r->progress.name),
-			"%s", "rebalance");
 }
