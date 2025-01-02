@@ -11,6 +11,7 @@
 #include "backpointers.h"
 #include "bset.h"
 #include "btree_gc.h"
+#include "btree_iter.h"
 #include "btree_update.h"
 #include "buckets.h"
 #include "buckets_waiting_for_journal.h"
@@ -1252,29 +1253,68 @@ static void bucket_gens_free_rcu(struct rcu_head *rcu)
 
 	kvfree(buckets);
 }
+#define USE_EXISTING_EVACUATE 1
 
-static int evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
+#if USE_EXISTING_EVACUATE
+/* convert from bucket to bpos, evacuate using bch2_evacuate_bucket()
+ *
+ * note that this naively uses bch2_evacuate_bucket which forces using and
+ * initializing a moving_context, move_bucket_in_flight, bch_move_stats, and
+ * data_update_opts. This requires a writepoint (in bch_fs?), and along the
+ * way requires modifying a user-facing string (nouse) and semantics of it.
+ * */
+static int __evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 {
 
+	int ret, i;
+	struct bpos bucket;
 	struct moving_context ctxt;
 	struct move_bucket_in_flight moving;
-	struct bpos bucket;
-	struct data_update_opts opts = {};
 	struct bch_move_stats move_stats;
-	int ret;
-	int gen = 0;  // unused?
+	struct data_update_opts opts = {};
 
 	bch2_move_stats_init(&move_stats, "resize");
 	bch2_moving_ctxt_init(&ctxt, c, NULL, &move_stats,
 			      writepoint_ptr(&c->resize_write_point),
 			      false);
-	while (nbuckets <= ca->mi.nbuckets) {
-		// TODO: convert from bucket number to bpos
-		ret = bch2_evacuate_bucket(&ctxt, &moving, bucket, gen, opts);
+	for (i = nbuckets; i <= ca->mi.nbuckets; i++) {
+		bucket = POS(ca->dev_idx, i);
+		ret = bch2_evacuate_bucket(&ctxt, &moving, bucket, 0, opts);
 		if (ret)
 			return ret;
 	}
 	return 0;
+}
+
+#else
+
+static int bch2_evacuate_range(struct bch_fs *c, struct bch_dev *ca, u64 start, u64 end)
+{
+	struct btree_iter iter;
+	struct bkey_s_c k;
+	int ret;
+
+	/* why use norestart? */
+	bch2_trans_do(c,
+		      PTR_ERR_OR_ZERO(for_each_btree_key_max_norestart(trans,
+					iter, BTREE_ID_backpointers,
+					POS(ca->dev_idx, start),
+					POS(ca->dev_idx, end),
+					0, k, ret
+					) { /* TODO: implement the logic from bch2_evacuate_bucket() */ }));
+}
+
+static int __evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
+{
+	/* TODO: define a new bch2_evacuate_range() */
+	return bch2_evacuate_range(nbuckets, ca->mi.nbuckets);
+}
+
+#endif
+
+static int evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
+{
+	return __evacuate_buckets_after(c, ca, nbuckets);
 }
 
 int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
