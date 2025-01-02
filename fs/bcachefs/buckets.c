@@ -1282,17 +1282,14 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 {
 	struct bucket_gens *bucket_gens = NULL, *old_bucket_gens = NULL;
 	bool resize = ca->bucket_gens != NULL;
-	int ret;
 
 	if (resize)
 		lockdep_assert_held(&c->state_lock);
 
 	bucket_gens = kvmalloc(struct_size(bucket_gens, b, nbuckets),
 			       GFP_KERNEL|__GFP_ZERO);
-	if (!bucket_gens) {
-		ret = -BCH_ERR_ENOMEM_bucket_gens;
-		goto err;
-	}
+	if (!bucket_gens)
+		return -BCH_ERR_ENOMEM_bucket_gens;
 
 	bucket_gens->first_bucket = ca->mi.first_bucket;
 	bucket_gens->nbuckets	= nbuckets;
@@ -1316,12 +1313,10 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 	nbuckets = ca->mi.nbuckets;
 
-	ret = 0;
-err:
 	if (bucket_gens)
 		call_rcu(&bucket_gens->rcu, bucket_gens_free_rcu);
 
-	return ret;
+	return 0;
 }
 
 void bch2_dev_buckets_free(struct bch_dev *ca)
