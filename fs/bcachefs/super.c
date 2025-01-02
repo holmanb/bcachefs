@@ -1918,12 +1918,6 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 	down_write(&c->state_lock);
 	old_nbuckets = ca->mi.nbuckets;
 
-	if (nbuckets < ca->mi.nbuckets) {
-		bch_err(ca, "Cannot shrink yet");
-		ret = -EINVAL;
-		goto err;
-	}
-
 	if (nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
 		bch_err(ca, "New device size too big (%llu greater than max %u)",
 			nbuckets, BCH_MEMBER_NBUCKETS_MAX);

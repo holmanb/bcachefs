@@ -228,8 +228,8 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c, struct bch_dev *
 	if (unlikely(is_superblock_bucket(c, ca, bucket)))
 		return NULL;
 
-	if (unlikely(ca->buckets_nouse && test_bit(bucket, ca->buckets_nouse))) {
-		s->skipped_nouse++;
+	if (unlikely(ca->nbuckets_resize > bucket)) {
+		s->skipped_shrinking++;
 		return NULL;
 	}
 
@@ -491,7 +491,7 @@ static noinline void trace_bucket_alloc2(struct bch_fs *c, struct bch_dev *ca,
 	prt_printf(&buf, "open\t%llu\n",	s->skipped_open);
 	prt_printf(&buf, "need journal commit\t%llu\n", s->skipped_need_journal_commit);
 	prt_printf(&buf, "nocow\t%llu\n",	s->skipped_nocow);
-	prt_printf(&buf, "nouse\t%llu\n",	s->skipped_nouse);
+	prt_printf(&buf, "shrinking\t%llu\n",	s->skipped_shrinking);
 	prt_printf(&buf, "mi_btree_bitmap\t%llu\n", s->skipped_mi_btree_bitmap);
 
 	if (!IS_ERR(ob)) {

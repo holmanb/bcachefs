@@ -553,7 +553,7 @@ struct bch_dev {
 	GENRADIX(struct bucket)	buckets_gc;
 	struct bucket_gens __rcu *bucket_gens;
 	u8			*oldest_gen;
-	unsigned long		*buckets_nouse;
+	u64			nbuckets_resize;
 
 	unsigned long		*bucket_backpointer_mismatches;
 	unsigned long		*bucket_backpointer_empty;
@@ -919,6 +919,7 @@ struct bch_fs {
 
 	struct write_point	btree_write_point;
 	struct write_point	rebalance_write_point;
+	struct write_point	resize_write_point;
 
 	struct write_point	write_points[WRITE_POINT_MAX];
 	struct hlist_head	write_points_hash[WRITE_POINT_HASH_NR];

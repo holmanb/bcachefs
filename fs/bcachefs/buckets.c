@@ -6,6 +6,7 @@
  */
 
 #include "bcachefs.h"
+#include "alloc_foreground.h"
 #include "alloc_background.h"
 #include "backpointers.h"
 #include "bset.h"
@@ -17,6 +18,7 @@
 #include "ec.h"
 #include "error.h"
 #include "inode.h"
+#include "move.h"
 #include "movinggc.h"
 #include "rebalance.h"
 #include "recovery.h"
@@ -1243,33 +1245,6 @@ recalculate:
 	return ret;
 }
 
-/* Startup/shutdown: */
-
-void bch2_buckets_nouse_free(struct bch_fs *c)
-{
-	for_each_member_device(c, ca) {
-		kvfree_rcu_mightsleep(ca->buckets_nouse);
-		ca->buckets_nouse = NULL;
-	}
-}
-
-int bch2_buckets_nouse_alloc(struct bch_fs *c)
-{
-	for_each_member_device(c, ca) {
-		BUG_ON(ca->buckets_nouse);
-
-		ca->buckets_nouse = kvmalloc(BITS_TO_LONGS(ca->mi.nbuckets) *
-					    sizeof(unsigned long),
-					    GFP_KERNEL|__GFP_ZERO);
-		if (!ca->buckets_nouse) {
-			bch2_dev_put(ca);
-			return -BCH_ERR_ENOMEM_buckets_nouse;
-		}
-	}
-
-	return 0;
-}
-
 static void bucket_gens_free_rcu(struct rcu_head *rcu)
 {
 	struct bucket_gens *buckets =
@@ -1278,10 +1253,35 @@ static void bucket_gens_free_rcu(struct rcu_head *rcu)
 	kvfree(buckets);
 }
 
+static int evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
+{
+
+	struct moving_context ctxt;
+	struct move_bucket_in_flight moving;
+	struct bpos bucket;
+	struct data_update_opts opts = {};
+	struct bch_move_stats move_stats;
+	int ret;
+	int gen = 0;  // unused?
+
+	bch2_move_stats_init(&move_stats, "resize");
+	bch2_moving_ctxt_init(&ctxt, c, NULL, &move_stats,
+			      writepoint_ptr(&c->resize_write_point),
+			      false);
+	while (nbuckets <= ca->mi.nbuckets) {
+		// TODO: convert from bucket number to bpos
+		ret = bch2_evacuate_bucket(&ctxt, &moving, bucket, gen, opts);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 {
 	struct bucket_gens *bucket_gens = NULL, *old_bucket_gens = NULL;
 	bool resize = ca->bucket_gens != NULL;
+	bool shrink = nbuckets < ca->mi.nbuckets;
 
 	if (resize)
 		lockdep_assert_held(&c->state_lock);
@@ -1290,6 +1290,10 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 			       GFP_KERNEL|__GFP_ZERO);
 	if (!bucket_gens)
 		return -BCH_ERR_ENOMEM_bucket_gens;
+
+	ca->nbuckets_resize = shrink ? nbuckets : 0;
+	if (shrink)
+		evacuate_buckets_after(c, ca, nbuckets);
 
 	bucket_gens->first_bucket = ca->mi.first_bucket;
 	bucket_gens->nbuckets	= nbuckets;
@@ -1321,7 +1325,6 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 void bch2_dev_buckets_free(struct bch_dev *ca)
 {
-	kvfree(ca->buckets_nouse);
 	kvfree(rcu_dereference_protected(ca->bucket_gens, 1));
 	free_percpu(ca->usage);
 }
