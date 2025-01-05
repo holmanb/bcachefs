@@ -1277,6 +1277,7 @@ static int __evacuate_buckets_after(struct bch_fs *c, struct bch_dev *ca, u64 nb
 	bch2_moving_ctxt_init(&ctxt, c, NULL, &move_stats,
 			      writepoint_ptr(&c->resize_write_point),
 			      false);
+	bch2_trans_unlock_long(&ctxt.trans);
 	for (i = nbuckets; i <= ca->mi.nbuckets; i++) {
 		bucket = POS(ca->dev_idx, i);
 		ret = bch2_evacuate_bucket(&ctxt, &moving, bucket, 0, opts);
