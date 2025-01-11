@@ -1955,13 +1955,24 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 			.dev_data_type.dev = ca->dev_idx,
 			.dev_data_type.data_type = BCH_DATA_free,
 		};
-		u64 v[3] = { nbuckets - old_nbuckets, 0, 0 };
+		// TODO: this is a negative number when shrinking, this is broken.
+		s64 v[3] = { nbuckets - old_nbuckets, 0, 0 };
 
 		ret   = bch2_trans_commit_do(ca->fs, NULL, NULL, 0,
-				bch2_disk_accounting_mod(trans, &acc, v, ARRAY_SIZE(v), false)) ?:
-			bch2_dev_freespace_init(c, ca, old_nbuckets, nbuckets);
+				bch2_disk_accounting_mod(trans, &acc, v, ARRAY_SIZE(v), false));
 		if (ret)
 			goto err;
+			// no, this isn't right - remove_alloc does some removals we don't want
+			// and also it didn't work in this test?
+		if (old_nbuckets > nbuckets) {
+			ret = bch2_remove_alloc_range(c, ca, old_nbuckets, nbuckets);
+			if (ret)
+				goto err;
+		} else {
+			ret = bch2_dev_freespace_init(c, ca, old_nbuckets, nbuckets);
+			if (ret)
+				goto err;
+		}
 	}
 
 	bch2_recalc_capacity(c);

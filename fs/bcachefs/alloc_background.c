@@ -2342,18 +2342,17 @@ int bch2_fs_freespace_init(struct bch_fs *c)
 
 /* device removal */
 
-int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
+int bch2_remove_alloc_range(struct bch_fs *c, struct bch_dev *ca, u64 bucket_start, u64 bucket_end)
 {
-	struct bpos start	= POS(ca->dev_idx, 0);
-	struct bpos end		= POS(ca->dev_idx, U64_MAX);
+	struct bpos start	= POS(ca->dev_idx, bucket_start);
+	struct bpos end		= POS(ca->dev_idx, bucket_end);
 	int ret;
 
 	/*
 	 * We clear the LRU and need_discard btrees first so that we don't race
 	 * with bch2_do_invalidates() and bch2_do_discards()
 	 */
-	ret =   bch2_dev_remove_stripes(c, ca->dev_idx) ?:
-		bch2_btree_delete_range(c, BTREE_ID_lru, start, end,
+	ret =   bch2_btree_delete_range(c, BTREE_ID_lru, start, end,
 					BTREE_TRIGGER_norun, NULL) ?:
 		bch2_btree_delete_range(c, BTREE_ID_need_discard, start, end,
 					BTREE_TRIGGER_norun, NULL) ?:
@@ -2364,7 +2363,16 @@ int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
 		bch2_btree_delete_range(c, BTREE_ID_bucket_gens, start, end,
 					BTREE_TRIGGER_norun, NULL) ?:
 		bch2_btree_delete_range(c, BTREE_ID_alloc, start, end,
-					BTREE_TRIGGER_norun, NULL) ?:
+					BTREE_TRIGGER_norun, NULL);
+	bch_err_msg(ca, ret, "removing range alloc info");
+	return ret;
+}
+
+int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
+{
+	int ret;
+	ret =   bch2_dev_remove_stripes(c, ca->dev_idx) ?:
+		bch2_remove_alloc_range(c, ca, 0, U64_MAX) ?:
 		bch2_dev_usage_remove(c, ca->dev_idx);
 	bch_err_msg(ca, ret, "removing dev alloc info");
 	return ret;
