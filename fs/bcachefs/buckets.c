@@ -18,6 +18,7 @@
 #include "error.h"
 #include "inode.h"
 #include "movinggc.h"
+#include "move.h"
 #include "rebalance.h"
 #include "recovery.h"
 #include "recovery_passes.h"
@@ -1278,9 +1279,17 @@ static void bucket_gens_free_rcu(struct rcu_head *rcu)
 	kvfree(buckets);
 }
 
+static bool evacuate_bucket_shrink_pred(struct bch_fs *c, void *_arg, struct bkey_s_c k,
+				 struct bch_io_opts *io_opts,
+				 struct data_update_opts *data_opts)
+{
+	return true;
+}
 int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 {
 	struct bucket_gens *bucket_gens = NULL, *old_bucket_gens = NULL;
+	struct moving_context ctx;
+	struct move_bucket_in_flight moving;
 	bool resize = ca->bucket_gens != NULL;
 	int ret;
 
@@ -1296,6 +1305,10 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 		ret = -BCH_ERR_ENOMEM_bucket_gens;
 		goto err;
 	}
+	if (nbuckets < ca->mi.nbuckets)
+		__bch2_move_data_phys(&ctx, &moving, ca->dev_idx, nbuckets,
+				      ca->mi.nbuckets, evacuate_bucket_shrink_pred, (void *)&ret
+		);
 
 	bucket_gens->first_bucket = ca->mi.first_bucket;
 	bucket_gens->nbuckets	= nbuckets;

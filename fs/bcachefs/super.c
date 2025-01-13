@@ -1916,12 +1916,6 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 	down_write(&c->state_lock);
 	old_nbuckets = ca->mi.nbuckets;
 
-	if (nbuckets < ca->mi.nbuckets) {
-		bch_err(ca, "Cannot shrink yet");
-		ret = -EINVAL;
-		goto err;
-	}
-
 	if (nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
 		bch_err(ca, "New device size too big (%llu greater than max %u)",
 			nbuckets, BCH_MEMBER_NBUCKETS_MAX);
@@ -1959,7 +1953,7 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 			.dev_data_type.dev = ca->dev_idx,
 			.dev_data_type.data_type = BCH_DATA_free,
 		};
-		u64 v[3] = { nbuckets - old_nbuckets, 0, 0 };
+		s64 v[3] = { nbuckets - old_nbuckets, 0, 0 };
 
 		ret   = bch2_trans_commit_do(ca->fs, NULL, NULL, 0,
 				bch2_disk_accounting_mod(trans, &acc, v, ARRAY_SIZE(v), false)) ?:

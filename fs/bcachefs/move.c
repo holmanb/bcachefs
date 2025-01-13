@@ -698,7 +698,7 @@ int bch2_move_data(struct bch_fs *c,
 	return ret;
 }
 
-static int __bch2_move_data_phys(struct moving_context *ctxt,
+int __bch2_move_data_phys(struct moving_context *ctxt,
 			struct move_bucket_in_flight *bucket_in_flight,
 			unsigned dev,
 			u64 bucket_start,
